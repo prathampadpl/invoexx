@@ -24,7 +24,7 @@ if (!admin.apps.length) {
 const app = express();
 const PORT = 3000;
 
-const upload = multer({ limits: { fileSize: 10 * 1024 * 1024 } }); // 10MB limit
+const upload = multer({ limits: { fileSize: 50 * 1024 * 1024 } }); // 50MB limit
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 const verifyToken = async (req: express.Request, res: express.Response, next: express.NextFunction): Promise<any> => {
@@ -86,20 +86,22 @@ app.post("/api/extract", verifyToken, upload.single("file"), async (req, res): P
     const { corrections, knownVendors } = req.body;
 
     let prompt = `You are INVOEX, a SaaS specialized in extracting Indian GST invoice data.
-Please analyze this invoice document entirely using your multimodal vision capabilities.
-IMPORTANT: The document may contain multiple pages.
-1. The first page is often a Shipping Label, Customer Self Declaration, or AWB containing superficial metadata. IGNORE the Shipping Label entirely! Do NOT extract from "Customer Self Declaration".
-2. You must specifically seek out the "Tax Invoice", "Invoice", or "Bill of Supply" section (usually on the second page or later).
-3. Extract the financial, line items, and billing data ONLY from the actual Tax Invoice section.
-4. If the invoice is handwritten, pay special attention to cursive handwriting, variations in date formats (like DD-MM-YYYY, DD/MM/YY), and numbers that might be ambiguous (e.g. 1 vs 7, 0 vs 6, 3 vs 8, 5 vs S vs J). For GSTINs, the PAN part has 4 digits, so fix S/J to 5 or O to 0 if needed.
-5. MATH VALIDATION IS CRITICAL FOR HANDWRITTEN BILLS: Before finalizing any ambiguous number, First, perform math validation (e.g., Quantity * Rate = Amount, Taxable Amount + CGST + SGST = Grand Total). Use the correct mathematical result to guide your OCR and correct misread digits. Note: If CGST and SGST are present, IGST should usually be 0. Sometimes "Round off" amounts are carelessly written on the IGST row. If Taxable + CGST + SGST + X = Grand Total, then X is the roundOff, NOT IGST.
+Please analyze this document entirely using your multimodal vision capabilities.
+CRITICAL INSTRUCTION: A single uploaded document (such as a multi-page PDF or consolidated image) may contain MULTIPLE DIFFERENT BILLS/INVOICES.
+You must analyze the entire document, identify the page boundaries or visual dividers between distinct bills, and extract EACH distinct bill as a separate invoice object within the root "invoices" array.
 
-Extract the following fields into JSON:
+IMPORTANT RULES FOR EACH INVOICE:
+1. Ignore superficial shipping labels or customer self-declarations. Seek out the actual "Tax Invoice", "Invoice", or "Bill of Supply" sections.
+2. For each distinct bill identified, determine its page range or location within the document (e.g., "Page 1", "Pages 2-3", "Bill 1") and include it in the "pageRange" field.
+3. If the invoice is handwritten, pay special attention to cursive handwriting, date variations (DD-MM-YYYY), and ambiguous numbers (1 vs 7, 0 vs 6, 5 vs S). For GSTINs, PAN has 4 digits (fix S/J to 5, O to 0).
+4. MATH VALIDATION IS CRITICAL: Before finalizing ambiguous numbers, perform math validation (Quantity * Rate = Amount, Taxable + CGST + SGST = Grand Total). Use the correct mathematical result to guide your OCR.
+
+Extract the data into a JSON object containing an "invoices" array. Each invoice object in the array MUST contain:
 - vendorName (string)
 - vendorGSTIN (string)
 - buyerGSTIN (string)
 - invoiceNumber (string)
-- invoiceDate (string, format YYYY-MM-DD. Convert any DD-MM-YYYY or DD-MM-YY to this standard format)
+- invoiceDate (string, format YYYY-MM-DD)
 - taxableAmount (number)
 - cgst (number)
 - sgst (number)
@@ -107,23 +109,12 @@ Extract the following fields into JSON:
 - grandTotal (number)
 - roundOff (number)
 - gstRate (number)
-- lineItems: CRITICAL STEP. Identify the line items/table section. You MUST accurately construct the line items array.
-  - Multi-line descriptions: Product descriptions often wrap across multiple lines. You MUST combine all text lines pertaining to the same item into a single \`description\` string. Do NOT create new line item objects for text that spilled over.
-  - Misaligned & Missing Columns: If quantity, rate, or amount are misaligned or pushed to the next line, perform spatial cross-referencing. 
-    * If quantity is missing but amount is present, assume quantity is 1 and rate = amount.
-    * If rate is missing or obscured, infer it as amount / quantity.
-    * If amount is missing, infer it as quantity * rate.
-  - Math check: Ensure quantity * rate closely matches the amount for each row.
-  - Mapping:
-    - description (string): Full merged text containing all details.
-    - quantity (number): The number of units.
-    - rate (number): Unit price.
-    - amount (number): Total for this row without taxes.
-- confidenceScore (number between 0 and 100 based on legibility and matching numbers)
-- doubtfulFields (array of strings, e.g., ["vendorGSTIN", "grandTotal"] for any fields you are struggling to read or are unsure about. Do your BEST GUESS for the actual value, never leave it empty if you can guess it.)
+- lineItems: Array of objects with description (string), quantity (number), rate (number), amount (number). Combine multi-line descriptions into one string.
+- confidenceScore (number between 0 and 100)
+- doubtfulFields (array of strings for struggling fields)
+- pageRange (string, e.g. "Page 1", "Pages 2-3")
 
-Return ONLY a valid JSON object matching the above structure. If a field is not found or completely illegible, use null or 0, but ALWAYS try your best guess.
-Ensure numbers are extracted cleanly without currency symbols, commas, or text (e.g., 100.00). Ensure the line item extraction is robust, prioritizing accurate mapping of columns.
+Return ONLY a valid JSON object matching the root "invoices" array structure. If a field is missing, use null or 0.
 `;
 
     if (corrections) {
@@ -156,34 +147,43 @@ Ensure numbers are extracted cleanly without currency symbols, commas, or text (
           responseSchema: {
             type: Type.OBJECT,
             properties: {
-               vendorName: { type: Type.STRING },
-               vendorGSTIN: { type: Type.STRING },
-               buyerGSTIN: { type: Type.STRING },
-               invoiceNumber: { type: Type.STRING },
-               invoiceDate: { type: Type.STRING },
-               taxableAmount: { type: Type.NUMBER },
-               cgst: { type: Type.NUMBER },
-               sgst: { type: Type.NUMBER },
-               igst: { type: Type.NUMBER },
-               grandTotal: { type: Type.NUMBER },
-               roundOff: { type: Type.NUMBER },
-               gstRate: { type: Type.NUMBER },
-               lineItems: {
+               invoices: {
                   type: Type.ARRAY,
                   items: {
                      type: Type.OBJECT,
                      properties: {
-                        description: { type: Type.STRING },
-                        quantity: { type: Type.NUMBER },
-                        rate: { type: Type.NUMBER },
-                        amount: { type: Type.NUMBER }
+                        vendorName: { type: Type.STRING },
+                        vendorGSTIN: { type: Type.STRING },
+                        buyerGSTIN: { type: Type.STRING },
+                        invoiceNumber: { type: Type.STRING },
+                        invoiceDate: { type: Type.STRING },
+                        taxableAmount: { type: Type.NUMBER },
+                        cgst: { type: Type.NUMBER },
+                        sgst: { type: Type.NUMBER },
+                        igst: { type: Type.NUMBER },
+                        grandTotal: { type: Type.NUMBER },
+                        roundOff: { type: Type.NUMBER },
+                        gstRate: { type: Type.NUMBER },
+                        lineItems: {
+                           type: Type.ARRAY,
+                           items: {
+                              type: Type.OBJECT,
+                              properties: {
+                                 description: { type: Type.STRING },
+                                 quantity: { type: Type.NUMBER },
+                                 rate: { type: Type.NUMBER },
+                                 amount: { type: Type.NUMBER }
+                              }
+                           }
+                        },
+                        confidenceScore: { type: Type.NUMBER },
+                        doubtfulFields: {
+                          type: Type.ARRAY,
+                          items: { type: Type.STRING }
+                        },
+                        pageRange: { type: Type.STRING }
                      }
                   }
-               },
-               confidenceScore: { type: Type.NUMBER },
-               doubtfulFields: {
-                 type: Type.ARRAY,
-                 items: { type: Type.STRING }
                }
             }
           }

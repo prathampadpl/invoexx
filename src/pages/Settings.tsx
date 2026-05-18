@@ -12,6 +12,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 export default function Settings() {
   const { orgId, user } = useAuth();
   const [rules, setRules] = useState<any[]>([]);
+  const [members, setMembers] = useState<any[]>([]);
+  const [invites, setInvites] = useState<any[]>([]);
   
   const [conditionField, setConditionField] = useState('vendorName');
   const [conditionOperator, setConditionOperator] = useState('contains');
@@ -23,11 +25,26 @@ export default function Settings() {
 
   useEffect(() => {
     if (!orgId) return;
-    const q = query(collection(db, `organizations/${orgId}/rules`));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const qRules = query(collection(db, `organizations/${orgId}/rules`));
+    const unsubRules = onSnapshot(qRules, (snapshot) => {
       setRules(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
     }, (error) => handleFirestoreError(error, OperationType.LIST, `organizations/${orgId}/rules`));
-    return unsubscribe;
+
+    const qMembers = query(collection(db, `organizations/${orgId}/members`));
+    const unsubMembers = onSnapshot(qMembers, (snapshot) => {
+      setMembers(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, `organizations/${orgId}/members`));
+
+    const qInvites = query(collection(db, `organizations/${orgId}/invites`));
+    const unsubInvites = onSnapshot(qInvites, (snapshot) => {
+      setInvites(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, `organizations/${orgId}/invites`));
+
+    return () => {
+      unsubRules();
+      unsubMembers();
+      unsubInvites();
+    };
   }, [orgId]);
 
   const handleAddRule = async () => {
@@ -75,6 +92,36 @@ export default function Settings() {
       alert("Invite sent to " + inviteEmail);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, `organizations/${orgId}/invites`);
+    }
+  };
+
+  const handleUpdateMemberRole = async (memberId: string, newRole: string) => {
+    try {
+      await setDoc(doc(db, `organizations/${orgId}/members`, memberId), { role: newRole }, { merge: true });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `organizations/${orgId}/members/${memberId}`);
+    }
+  };
+
+  const handleRemoveMember = async (memberId: string) => {
+    if (memberId === user?.uid) {
+      alert("You cannot remove yourself from the organization.");
+      return;
+    }
+    if (confirm("Are you sure you want to remove this member?")) {
+      try {
+        await deleteDoc(doc(db, `organizations/${orgId}/members`, memberId));
+      } catch (error) {
+        handleFirestoreError(error, OperationType.DELETE, `organizations/${orgId}/members/${memberId}`);
+      }
+    }
+  };
+
+  const handleCancelInvite = async (inviteId: string) => {
+    try {
+      await deleteDoc(doc(db, `organizations/${orgId}/invites`, inviteId));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `organizations/${orgId}/invites/${inviteId}`);
     }
   };
 
@@ -215,18 +262,89 @@ export default function Settings() {
       <Card>
         <CardHeader>
           <CardTitle>Team Members & Invites</CardTitle>
-          <p className="text-sm text-neutral-500">Invite people to your organization.</p>
+          <p className="text-sm text-neutral-500">Manage organization members and pending invitations.</p>
         </CardHeader>
         <CardContent className="space-y-6">
-          <div className="flex gap-4">
-             <div className="flex-1">
-               <Label>Email Address</Label>
-               <Input type="email" placeholder="colleague@company.com" value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} />
+          <div className="flex flex-col sm:flex-row gap-4 items-end bg-neutral-50 p-4 rounded-lg border border-neutral-200">
+             <div className="flex-1 w-full">
+               <Label className="text-xs font-semibold text-gray-600 uppercase">Invite New Member</Label>
+               <Input type="email" placeholder="colleague@company.com" value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} className="mt-1 bg-white" />
              </div>
-             <div className="flex items-end">
-               <Button onClick={handleInvite}>Send Invite</Button>
-             </div>
+             <Button onClick={handleInvite} className="w-full sm:w-auto font-semibold">Send Invite</Button>
           </div>
+
+          <div className="space-y-4">
+            <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider">Active Members ({members.length})</h3>
+            <div className="border border-gray-200 rounded-lg overflow-hidden bg-white shadow-sm">
+              <Table>
+                <TableHeader className="bg-gray-50">
+                  <TableRow>
+                    <TableHead className="font-semibold text-gray-600">User Email</TableHead>
+                    <TableHead className="font-semibold text-gray-600">Role</TableHead>
+                    <TableHead className="font-semibold text-gray-600">Joined</TableHead>
+                    <TableHead className="text-right"></TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {members.map(m => (
+                    <TableRow key={m.id}>
+                      <TableCell className="font-medium text-gray-900">{m.email}</TableCell>
+                      <TableCell>
+                        <Select value={m.role} onValueChange={(val) => handleUpdateMemberRole(m.id, val)} disabled={m.id === user?.uid}>
+                          <SelectTrigger className="w-32 h-8 text-xs font-semibold shadow-none"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="admin">Admin</SelectItem>
+                            <SelectItem value="member">Member</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </TableCell>
+                      <TableCell className="text-sm text-gray-500">{m.createdAt ? new Date(m.createdAt).toLocaleDateString() : '-'}</TableCell>
+                      <TableCell className="text-right">
+                        {m.id !== user?.uid && (
+                          <Button variant="ghost" size="sm" className="text-red-500 hover:text-red-700 hover:bg-red-50 transition-colors" onClick={() => handleRemoveMember(m.id)}>Remove</Button>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {members.length === 0 && <TableRow><TableCell colSpan={4} className="text-center text-neutral-500 py-8">No active members found.</TableCell></TableRow>}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+
+          {invites.length > 0 && (
+            <div className="space-y-4 pt-2">
+              <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider">Pending Invites ({invites.length})</h3>
+              <div className="border border-gray-200 rounded-lg overflow-hidden bg-white shadow-sm">
+                <Table>
+                  <TableHeader className="bg-gray-50">
+                    <TableRow>
+                      <TableHead className="font-semibold text-gray-600">Email</TableHead>
+                      <TableHead className="font-semibold text-gray-600">Status</TableHead>
+                      <TableHead className="font-semibold text-gray-600">Invited</TableHead>
+                      <TableHead className="text-right"></TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {invites.map(inv => (
+                      <TableRow key={inv.id}>
+                        <TableCell className="font-medium text-gray-900">{inv.email}</TableCell>
+                        <TableCell>
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                            {inv.status}
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-sm text-gray-500">{inv.createdAt ? new Date(inv.createdAt).toLocaleDateString() : '-'}</TableCell>
+                        <TableCell className="text-right">
+                          <Button variant="ghost" size="sm" className="text-red-500 hover:text-red-700 hover:bg-red-50 transition-colors" onClick={() => handleCancelInvite(inv.id)}>Cancel</Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

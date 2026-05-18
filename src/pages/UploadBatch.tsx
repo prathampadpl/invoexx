@@ -134,43 +134,61 @@ export default function UploadBatch() {
           throw fetchErr;
         }
         
-        updateFileStatus(file, 'Applying rules and saving...');
-        // 4. Fetch and apply org rules
-        let processedData = { ...data };
-        try {
-          for (const rule of rules) {
-             const { conditionField, conditionOperator, conditionValue, actionField, actionValue } = rule;
-             const fieldValue = processedData[conditionField];
-             if (fieldValue !== undefined) {
-               let match = false;
-               const valStr = String(fieldValue).toLowerCase();
-               const condStr = conditionValue.toLowerCase();
-               if (conditionOperator === 'contains' && valStr.includes(condStr)) match = true;
-               if (conditionOperator === 'equals' && valStr === condStr) match = true;
-               if (conditionOperator === 'startsWith' && valStr.startsWith(condStr)) match = true;
-               if (conditionOperator === 'endsWith' && valStr.endsWith(condStr)) match = true;
-               
-               if (match) {
-                 processedData[actionField] = actionField === 'gstRate' || actionField.toLowerCase().includes('amount') ? parseFloat(actionValue) : actionValue;
+        const invoiceList = Array.isArray(data?.invoices) ? data.invoices : [data];
+        
+        updateFileStatus(file, `Applying rules and saving ${invoiceList.length} bill(s)...`);
+        
+        for (let idx = 0; idx < invoiceList.length; idx++) {
+          const invData = invoiceList[idx];
+          let processedData = { ...invData };
+          try {
+            for (const rule of rules) {
+               const { conditionField, conditionOperator, conditionValue, actionField, actionValue } = rule;
+               const fieldValue = processedData[conditionField];
+               if (fieldValue !== undefined) {
+                 let match = false;
+                 const valStr = String(fieldValue).toLowerCase();
+                 const condStr = conditionValue.toLowerCase();
+                 if (conditionOperator === 'contains' && valStr.includes(condStr)) match = true;
+                 if (conditionOperator === 'equals' && valStr === condStr) match = true;
+                 if (conditionOperator === 'startsWith' && valStr.startsWith(condStr)) match = true;
+                 if (conditionOperator === 'endsWith' && valStr.endsWith(condStr)) match = true;
+                 
+                 if (match) {
+                   processedData[actionField] = actionField === 'gstRate' || actionField.toLowerCase().includes('amount') ? parseFloat(actionValue) : actionValue;
+                 }
                }
-             }
+            }
+          } catch (e) {
+            console.error("Rule evaluation error", e);
           }
-        } catch (e) {
-          console.error("Rule evaluation error", e);
+
+          Object.keys(processedData).forEach(key => {
+            if (processedData[key] === null) {
+              delete processedData[key];
+            }
+          });
+
+          let currentInvoiceRef = invoiceRef;
+          let billLabel = invoiceList.length > 1 ? ` (Bill ${idx + 1}${invData.pageRange ? `, ${invData.pageRange}` : ''})` : '';
+          
+          if (idx > 0) {
+            currentInvoiceRef = doc(collection(db, `organizations/${orgId}/invoices`));
+          }
+
+          await setDoc(currentInvoiceRef, {
+            orgId,
+            fileName: file.name + billLabel,
+            fileType: file.type,
+            fileUrl,
+            uploadedBy: auth.currentUser!.uid,
+            uploadedAt: Date.now() + idx,
+            ...processedData,
+            status: processedData.validationErrors?.length ? 'Ready for Review' : 'Approved',
+          }, { merge: true });
         }
 
-        Object.keys(processedData).forEach(key => {
-          if (processedData[key] === null) {
-            delete processedData[key];
-          }
-        });
-
-        await setDoc(invoiceRef, {
-          ...processedData,
-          status: processedData.validationErrors?.length ? 'Ready for Review' : 'Approved',
-        }, { merge: true });
-
-        updateFileStatus(file, 'Completed Successfully');
+        updateFileStatus(file, `Completed Successfully (${invoiceList.length} bill(s) extracted)`);
 
       } catch (err: any) {
         console.error('File process error', err);
@@ -279,7 +297,7 @@ export default function UploadBatch() {
               <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
             </div>
             <h3 className="text-lg font-semibold">Click to upload or drag and drop</h3>
-            <p className="text-sm text-neutral-500 mt-2">PDF, PNG, JPG or WEBP (Max 10MB per file). Up to 100 files.</p>
+            <p className="text-sm text-neutral-500 mt-2">PDF, PNG, JPG or WEBP (Max 50MB per file). Up to 100 files.</p>
           </div>
 
           {files.length > 0 && (

@@ -59,10 +59,8 @@ export default function MainLayout() {
           </Link>
           
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-               <button className="w-8 h-8 flex items-center justify-center bg-gray-900 text-white rounded-full text-xs font-bold text-center ml-2 border border-gray-900 focus:outline-none">
-                 {userInitials}
-               </button>
+            <DropdownMenuTrigger className="w-8 h-8 flex items-center justify-center bg-gray-900 text-white rounded-full text-xs font-bold text-center ml-2 border border-gray-900 focus:outline-none">
+              {userInitials}
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48">
               <div className="px-2 py-1.5 text-sm text-gray-500 truncate">{user?.email}</div>

@@ -17,6 +17,10 @@ export default function Dashboard() {
   const [invoices, setInvoices] = useState<any[]>([]);
   const [statusFilter, setStatusFilter] = useState('All statuses');
   const [searchQuery, setSearchQuery] = useState('');
+  const [filterStartDate, setFilterStartDate] = useState('');
+  const [filterEndDate, setFilterEndDate] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 10;
 
   useEffect(() => {
     if (!orgId) return;
@@ -33,16 +37,32 @@ export default function Dashboard() {
     return unsubscribe;
   }, [orgId]);
 
-  const filteredInvoices = invoices.filter(inv => {
-    if (statusFilter !== 'All statuses' && inv.status !== statusFilter) return false;
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      if (!inv.vendorName?.toLowerCase().includes(q) && !inv.invoiceNumber?.toLowerCase().includes(q)) {
-        return false;
+  const filteredInvoices = useMemo(() => {
+    return invoices.filter(inv => {
+      if (statusFilter !== 'All statuses' && inv.status !== statusFilter) return false;
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase();
+        if (!inv.vendorName?.toLowerCase().includes(q) && !inv.invoiceNumber?.toLowerCase().includes(q)) {
+          return false;
+        }
       }
-    }
-    return true;
-  });
+      if (filterStartDate && inv.invoiceDate) {
+        if (inv.invoiceDate < filterStartDate) return false;
+      }
+      if (filterEndDate && inv.invoiceDate) {
+        if (inv.invoiceDate > filterEndDate) return false;
+      }
+      return true;
+    });
+  }, [invoices, statusFilter, searchQuery, filterStartDate, filterEndDate]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredInvoices.length / pageSize));
+  const validCurrentPage = Math.min(currentPage, totalPages);
+
+  const paginatedInvoices = useMemo(() => {
+    const start = (validCurrentPage - 1) * pageSize;
+    return filteredInvoices.slice(start, start + pageSize);
+  }, [filteredInvoices, validCurrentPage, pageSize]);
 
   const { approvedPercent, topVendors, dailyData } = useMemo(() => {
     let approved = 0;
@@ -257,9 +277,38 @@ export default function Dashboard() {
                </select>
                <ChevronDown className="w-4 h-4 absolute right-2.5 top-1/2 transform -translate-y-1/2 text-gray-500 pointer-events-none" />
             </div>
-            <div className="flex items-center border border-gray-200 rounded-md bg-white h-9">
-              <div className="px-3 text-sm text-gray-500 font-medium flex items-center border-r border-gray-200 h-full">dd-mm-yyyy <Calendar className="w-4 h-4 ml-2 opacity-50"/></div>
-              <div className="px-3 text-sm text-gray-500 font-medium flex items-center h-full">dd-mm-yyyy <Calendar className="w-4 h-4 ml-2 opacity-50"/></div>
+            <div className="flex items-center border border-gray-200 rounded-md bg-white h-9 px-2 gap-2">
+              <div className="flex items-center gap-1 text-xs text-gray-500 font-medium">
+                <Calendar className="w-3.5 h-3.5 opacity-50" />
+                <span>From:</span>
+                <input 
+                  type="date" 
+                  className="bg-transparent border-none text-xs text-gray-700 focus:outline-none cursor-pointer"
+                  value={filterStartDate}
+                  onChange={(e) => { setFilterStartDate(e.target.value); setCurrentPage(1); }}
+                />
+              </div>
+              <div className="text-gray-300">|</div>
+              <div className="flex items-center gap-1 text-xs text-gray-500 font-medium">
+                <Calendar className="w-3.5 h-3.5 opacity-50" />
+                <span>To:</span>
+                <input 
+                  type="date" 
+                  className="bg-transparent border-none text-xs text-gray-700 focus:outline-none cursor-pointer"
+                  value={filterEndDate}
+                  onChange={(e) => { setFilterEndDate(e.target.value); setCurrentPage(1); }}
+                />
+              </div>
+              {(filterStartDate || filterEndDate) && (
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  className="h-6 px-1.5 text-[10px] text-gray-500 hover:text-gray-900" 
+                  onClick={() => { setFilterStartDate(''); setFilterEndDate(''); setCurrentPage(1); }}
+                >
+                  Clear
+                </Button>
+              )}
             </div>
           </div>
         </CardHeader>
@@ -286,7 +335,7 @@ export default function Dashboard() {
                   </TableCell>
                 </TableRow>
               )}
-              {filteredInvoices.map(inv => (
+              {paginatedInvoices.map(inv => (
                 <TableRow key={inv.id} className="border-gray-100">
                   <TableCell className="font-semibold text-gray-900 text-sm whitespace-nowrap">{inv.invoiceNumber || <span className="opacity-50">-</span>}</TableCell>
                   <TableCell className="font-medium text-gray-600 text-sm">{inv.vendorName || <span className="opacity-50">Unknown</span>}</TableCell>
@@ -315,12 +364,30 @@ export default function Dashboard() {
             </TableBody>
           </Table>
           
-          <div className="flex items-center justify-between mt-4 text-xs font-medium text-gray-500 border-t border-gray-100 pt-4">
-             <div>Showing {filteredInvoices.length} of {invoices.length} invoices</div>
+          <div className="flex flex-col sm:flex-row items-center justify-between mt-4 text-xs font-medium text-gray-500 border-t border-gray-100 pt-4 gap-4">
+             <div>
+               Showing {Math.min(filteredInvoices.length, (validCurrentPage - 1) * pageSize + 1)} to {Math.min(filteredInvoices.length, validCurrentPage * pageSize)} of {filteredInvoices.length} matching invoices (Total: {invoices.length})
+             </div>
              <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" disabled className="h-8 rounded text-xs px-3">Previous</Button>
-                <span>Page 1 of 1</span>
-                <Button variant="outline" size="sm" disabled className="h-8 rounded text-xs px-3">Next</Button>
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  disabled={validCurrentPage <= 1} 
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  className="h-8 rounded text-xs px-3"
+                >
+                  Previous
+                </Button>
+                <span className="font-semibold text-gray-700">Page {validCurrentPage} of {totalPages}</span>
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  disabled={validCurrentPage >= totalPages} 
+                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                  className="h-8 rounded text-xs px-3"
+                >
+                  Next
+                </Button>
              </div>
           </div>
         </CardContent>
