@@ -6,6 +6,5 @@ coverage/
 *.log
 .env*
 !.env.example
-firebase-applet-config.json
 test.ts
 dummy.txt
